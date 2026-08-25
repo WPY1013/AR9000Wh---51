@@ -1,0 +1,5 @@
+Build target 'Target 1'
+compiling key.c...
+Application\key.c(93): error C141: syntax error near '', expected '__asm'
+Target not created.
+Build Time Elapsed:  00:00:00

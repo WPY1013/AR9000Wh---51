@@ -1,0 +1,661 @@
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MODBUS
+OBJECT MODULE PLACED IN .\Objects\modbus.obj
+COMPILER INVOKED BY: C:\Keil_v5\Keil_C51\C51\BIN\C51.EXE Application\modbus.c LARGE OMF2 WARNINGLEVEL(0) OPTIMIZE(8,SPEE
+                    -D) BROWSE INCDIR(.\User;.\Application) DEBUG PRINT(.\Listings\modbus.lst) TABS(2) OBJECT(.\Objects\modbus.obj)
+
+line level    source
+
+   1          #include "modbus.h"
+   2          #include <STC8H.H>
+   3          #include "usart.h"
+   4          /* ================================================================
+   5           * ???????? XDATA ?
+   6           * ================================================================ */
+   7          static unsigned char xdata tx_buf[256];
+   8          static unsigned char xdata rx_buf[256];
+   9          unsigned int xdata BMS_RegisterValues[31];
+  10          
+  11          static unsigned char xdata rt_rx_buf[32];
+  12          static volatile unsigned char rt_rx_cnt = 0;
+  13          static volatile bit rt_read_active = 0;
+  14          static volatile bit rt_ready = 0;
+  15          static volatile unsigned char rt_frame_len = 0;
+  16          static unsigned long rt_deadline = 0;
+  17          
+  18          /* ================================================================
+  19           * ???????????????
+  20           * ================================================================ */
+  21          static void UART_SendByte(unsigned char byte) {
+  22   1          S2BUF = byte;
+  23   1          while ((S2CON & 0x02) == 0);
+  24   1          S2CON &= (unsigned char)~0x02;
+  25   1      }
+  26          
+  27          static void UART_SendBytes(unsigned char *Ddata, unsigned char len) {
+  28   1          unsigned char i;
+  29   1          for (i = 0; i < len; i++) {
+  30   2              UART2_SendByte(Ddata[i]);
+  31   2          }
+  32   1      }
+  33          
+  34          static int UART_ReceiveBytes(unsigned char *buf, unsigned char len, unsigned int timeout_ms) {
+  35   1          unsigned char cnt = 0;
+  36   1          unsigned long start, now;
+  37   1          start = GetTickMs();
+  38   1          while (cnt < len) {
+  39   2              if (S2CON & 0x01) {
+  40   3                  buf[cnt++] = S2BUF;
+  41   3                  S2CON &= (unsigned char)~0x01;
+  42   3                  start = GetTickMs();
+  43   3              }
+  44   2              now = GetTickMs();
+  45   2              if ((now - start) >= timeout_ms) {
+  46   3                  return -1;
+  47   3              }
+  48   2          }
+  49   1          return 0;
+  50   1      }
+  51          
+  52          static void BMS_ClearRxState(void)
+  53          {
+  54   1          unsigned char dummy;
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 2   
+
+  55   1      
+  56   1          while (S2CON & 0x01) {
+  57   2              dummy = S2BUF;
+  58   2              S2CON &= (unsigned char)~0x01;
+  59   2          }
+  60   1      
+  61   1          dummy = dummy;
+  62   1      }
+  63          
+  64          /* ================================================================
+  65           * CRC16 ????????????
+  66           * ================================================================ */
+  67          unsigned int BMS_CRC16(unsigned char *Ddata, unsigned char len) {
+  68   1          unsigned int crc = 0xFFFF;
+  69   1          unsigned char i, j;
+  70   1          for (i = 0; i < len; i++) {
+  71   2              crc ^= Ddata[i];
+  72   2              for (j = 0; j < 8; j++) {
+  73   3                  if (crc & 0x0001)
+  74   3                      crc = (crc >> 1) ^ 0xA001;
+  75   3                  else
+  76   3                      crc >>= 1;
+  77   3              }
+  78   2          }
+  79   1          return crc;
+  80   1      }
+  81          
+  82          /* ================================================================
+  83           * ?????????
+  84           * ================================================================ */
+  85          static int BMS_SendReceive(unsigned char tx_len, unsigned char expected_rx_len) {
+  86   1          unsigned char actual_rx_len;
+  87   1          unsigned int crc_rx, crc_calc;
+  88   1          int ret;
+  89   1      
+  90   1          if (expected_rx_len < 5U) return -6;
+  91   1      
+  92   1          BMS_ClearRxState();
+  93   1      
+  94   1          UART_SendBytes(tx_buf, tx_len);
+  95   1      
+  96   1          ret = UART_ReceiveBytes(rx_buf, 2, BMS_USART_TIMEOUT);
+  97   1          if (ret != 0) return ret;
+  98   1      
+  99   1          actual_rx_len = (rx_buf[1] & 0x80U) ? 5U : expected_rx_len;
+ 100   1      
+ 101   1          ret = UART_ReceiveBytes(&rx_buf[2], actual_rx_len - 2, BMS_USART_TIMEOUT);
+ 102   1          if (ret != 0) return ret;
+ 103   1      
+ 104   1          crc_rx = ((unsigned int)rx_buf[actual_rx_len - 1] << 8) | rx_buf[actual_rx_len - 2];
+ 105   1          crc_calc = BMS_CRC16(rx_buf, actual_rx_len - 2);
+ 106   1          if (crc_rx != crc_calc) return -4;
+ 107   1      
+ 108   1          if (rx_buf[0] != BMS_SLAVE_ID) return -5;
+ 109   1      
+ 110   1          if (rx_buf[1] & 0x80U) return -(100 + rx_buf[2]);
+ 111   1      
+ 112   1          return 0;
+ 113   1      }
+ 114          
+ 115          /* ================================================================
+ 116           * ???????
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 3   
+
+ 117           * ================================================================ */
+ 118          int BMS_WriteRegister1(unsigned char cmd, unsigned int addr, unsigned int value,
+ 119                                 unsigned int *p_data, unsigned int *buf) {
+ 120   1          unsigned char idx;
+ 121   1          unsigned int crc;
+ 122   1          unsigned int i;
+ 123   1          unsigned char rx_len;
+ 124   1          int ret;
+ 125   1      
+ 126   1          if (cmd != 0x03U && cmd != 0x10U) return -7;
+ 127   1      
+ 128   1          if (cmd == 0x03U) {
+ 129   2              if (value == 0U || value > 125U || buf == 0) return -8;
+ 130   2          } else {
+ 131   2              if (value == 0U || value > 123U || p_data == 0) return -8;
+ 132   2          }
+ 133   1      
+ 134   1          idx = 0;
+ 135   1          tx_buf[idx++] = BMS_SLAVE_ID;
+ 136   1          tx_buf[idx++] = cmd;
+ 137   1          tx_buf[idx++] = (unsigned char)(addr >> 8);
+ 138   1          tx_buf[idx++] = (unsigned char)(addr & 0xFFU);
+ 139   1      
+ 140   1          if (cmd == 0x03) {
+ 141   2              tx_buf[idx++] = (unsigned char)(value >> 8);
+ 142   2              tx_buf[idx++] = (unsigned char)(value & 0xFFU);
+ 143   2          } else {
+ 144   2              tx_buf[idx++] = (unsigned char)(value >> 8);
+ 145   2              tx_buf[idx++] = (unsigned char)(value & 0xFFU);
+ 146   2              tx_buf[idx++] = value * 2;
+ 147   2              for (i = 0; i < value; i++) {
+ 148   3                  tx_buf[idx++] = (unsigned char)(p_data[i] >> 8);
+ 149   3                  tx_buf[idx++] = (unsigned char)(p_data[i] & 0xFF);
+ 150   3              }
+ 151   2          }
+ 152   1      
+ 153   1          crc = BMS_CRC16(tx_buf, idx);
+ 154   1          tx_buf[idx++] = (unsigned char)(crc & 0xFF);
+ 155   1          tx_buf[idx++] = (unsigned char)(crc >> 8);
+ 156   1      
+ 157   1          if (cmd == 0x03) {
+ 158   2              if (buf == 0) return -8;
+ 159   2              rx_len = 5 + value * 2;
+ 160   2              ret = BMS_SendReceive(idx, rx_len);
+ 161   2              if (ret != 0) return ret;
+ 162   2              for (i = 0; i < value; i++) {
+ 163   3                  buf[i] = ((unsigned int)rx_buf[3 + i * 2] << 8) | rx_buf[4 + i * 2];
+ 164   3              }
+ 165   2              return 0;
+ 166   2          } else {
+ 167   2              return BMS_SendReceive(idx, 8);
+ 168   2          }
+ 169   1      }
+ 170          
+ 171          int BMS_ReadRegisters(unsigned char addr, unsigned char count, unsigned int *buf) {
+ 172   1          unsigned char idx;
+ 173   1          unsigned int crc;
+ 174   1          unsigned char rx_len;
+ 175   1          int ret;
+ 176   1          unsigned char i;
+ 177   1      
+ 178   1          idx = 0;
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 4   
+
+ 179   1          tx_buf[idx++] = BMS_SLAVE_ID;
+ 180   1          tx_buf[idx++] = 0x03;
+ 181   1          tx_buf[idx++] = (unsigned char)(addr >> 8);
+ 182   1          tx_buf[idx++] = (unsigned char)(addr & 0xFFU);
+ 183   1          tx_buf[idx++] = 0x00;
+ 184   1          tx_buf[idx++] = count;
+ 185   1      
+ 186   1          crc = BMS_CRC16(tx_buf, idx);
+ 187   1          tx_buf[idx++] = (unsigned char)(crc & 0xFF);
+ 188   1          tx_buf[idx++] = (unsigned char)(crc >> 8);
+ 189   1      
+ 190   1          rx_len = 5 + count * 2;
+ 191   1          ret = BMS_SendReceive(idx, rx_len);
+ 192   1          if (ret != 0) return ret;
+ 193   1      
+ 194   1          for (i = 0; i < count; i++) {
+ 195   2              buf[i] = ((unsigned int)rx_buf[3 + i * 2] << 8) | rx_buf[4 + i * 2];
+ 196   2          }
+ 197   1          return 0;
+ 198   1      }
+ 199          
+ 200          int BMS_WriteRegister(unsigned char addr, unsigned int value) {
+ 201   1          unsigned char idx;
+ 202   1          unsigned int crc;
+ 203   1      
+ 204   1          idx = 0;
+ 205   1          tx_buf[idx++] = BMS_SLAVE_ID;
+ 206   1          tx_buf[idx++] = 0x06;
+ 207   1          tx_buf[idx++] = (unsigned char)(addr >> 8);
+ 208   1          tx_buf[idx++] = (unsigned char)(addr & 0xFFU);
+ 209   1          tx_buf[idx++] = (unsigned char)(value >> 8);
+ 210   1          tx_buf[idx++] = (unsigned char)(value & 0xFF);
+ 211   1      
+ 212   1          crc = BMS_CRC16(tx_buf, idx);
+ 213   1          tx_buf[idx++] = (unsigned char)(crc & 0xFF);
+ 214   1          tx_buf[idx++] = (unsigned char)(crc >> 8);
+ 215   1      
+ 216   1          return BMS_SendReceive(idx, 8);
+ 217   1      }
+ 218          
+ 219          int BMS_WriteRegisters(unsigned char addr, unsigned char count, unsigned int *values) {
+ 220   1          unsigned char idx;
+ 221   1          unsigned int crc;
+ 222   1          unsigned char i;
+ 223   1      
+ 224   1          idx = 0;
+ 225   1          tx_buf[idx++] = BMS_SLAVE_ID;
+ 226   1          tx_buf[idx++] = 0x10;
+ 227   1          tx_buf[idx++] = (unsigned char)(addr >> 8);
+ 228   1          tx_buf[idx++] = (unsigned char)(addr & 0xFFU);
+ 229   1          tx_buf[idx++] = 0x00;
+ 230   1          tx_buf[idx++] = count;
+ 231   1          tx_buf[idx++] = count * 2;
+ 232   1      
+ 233   1          for (i = 0; i < count; i++) {
+ 234   2              tx_buf[idx++] = (unsigned char)(values[i] >> 8);
+ 235   2              tx_buf[idx++] = (unsigned char)(values[i] & 0xFF);
+ 236   2          }
+ 237   1      
+ 238   1          crc = BMS_CRC16(tx_buf, idx);
+ 239   1          tx_buf[idx++] = (unsigned char)(crc & 0xFF);
+ 240   1          tx_buf[idx++] = (unsigned char)(crc >> 8);
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 5   
+
+ 241   1      
+ 242   1          return BMS_SendReceive(idx, 8);
+ 243   1      }
+ 244          
+ 245          int BMS_SendCommand(unsigned int cmd, unsigned int Ddata) {
+ 246   1          int ret;
+ 247   1          ret = BMS_WriteRegister(1, Ddata);
+ 248   1          if (ret != 0) return ret;
+ 249   1          DelayMs(10);
+ 250   1          return BMS_WriteRegister(2, cmd);
+ 251   1      }
+ 252          
+ 253          /* ================================================================
+ 254           * ???? ? ?????????? xdata
+ 255           * ================================================================ */
+ 256          int BMS_ReadSystemInfo(BMS_SystemInfo_t *sys) {
+ 257   1          unsigned int xdata buf[5] = 0;
+ 258   1          int ret1;
+ 259   1          ret1 = BMS_ReadRegisters(0, 5, buf);
+ 260   1          if (ret1 != 0) return ret1;
+ 261   1          sys->res1             = buf[0];
+ 262   1          sys->modbus_cmd_data  = buf[1];
+ 263   1          sys->modbus_cmd       = buf[2];
+ 264   1          sys->software_version = buf[3];
+ 265   1          sys->hardware_version = buf[4];
+ 266   1          return 0;
+ 267   1      }
+ 268          
+ 269          int BMS_ReadIDInfo(BMS_IDInfo_t *id) {
+ 270   1          int ret;
+ 271   1          unsigned char i;
+ 272   1          ret = BMS_ReadRegisters(5, 26, &BMS_RegisterValues[5]);
+ 273   1          if (ret != 0) return ret;
+ 274   1          for (i = 0; i < 26; i++) {
+ 275   2              ((unsigned char *)id)[i * 2]     = (unsigned char)(BMS_RegisterValues[i + 5] & 0xFFU);
+ 276   2              ((unsigned char *)id)[i * 2 + 1] = (unsigned char)(BMS_RegisterValues[i + 5] >> 8);
+ 277   2          }
+ 278   1          return 0;
+ 279   1      }
+ 280          
+ 281          int BMS_ReadEventCount(BMS_EventCount_t *event) {
+ 282   1          unsigned int xdata buf[15];
+ 283   1          int ret;
+ 284   1          ret = BMS_ReadRegisters(31, 15, buf);
+ 285   1          if (ret != 0) return ret;
+ 286   1          event->restart_times       = buf[0];
+ 287   1          event->sleep_times         = buf[1];
+ 288   1          event->power_lost_times    = buf[2];
+ 289   1          event->total_run_time      = buf[3];
+ 290   1          event->err_cell_ov_times   = buf[4];
+ 291   1          event->err_cell_uv_times   = buf[5];
+ 292   1          event->err_pack_ov_times   = buf[6];
+ 293   1          event->err_pack_uv_times   = buf[7];
+ 294   1          event->err_chg_oc_times    = buf[8];
+ 295   1          event->err_dsg_oc_times    = buf[9];
+ 296   1          event->err_chg_ot_times    = buf[10];
+ 297   1          event->err_chg_ut_times    = buf[11];
+ 298   1          event->err_dsg_ot_times    = buf[12];
+ 299   1          event->err_dsg_ut_times    = buf[13];
+ 300   1          event->err_sc_times        = buf[14];
+ 301   1          return 0;
+ 302   1      }
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 6   
+
+ 303          
+ 304          int BMS_ReadCalibConfig(BMS_CalibConfig_t *calib) {
+ 305   1          unsigned int xdata buf[3];
+ 306   1          int ret;
+ 307   1          ret = BMS_ReadRegisters(46, 3, buf);
+ 308   1          if (ret != 0) return ret;
+ 309   1          calib->ntc_material    = buf[0];
+ 310   1          calib->zero_adjust     = (signed int)buf[1];
+ 311   1          calib->current_adjust  = buf[2];
+ 312   1          ret = BMS_ReadRegisters(50, 2, buf);
+ 313   1          if (ret != 0) return ret;
+ 314   1          calib->cell_material   = buf[0];
+ 315   1          calib->factory_ah      = buf[1];
+ 316   1          return 0;
+ 317   1      }
+ 318          
+ 319          int BMS_ReadVoltageProtect(BMS_VoltageProtect_t *volt) {
+ 320   1          unsigned int xdata buf[8];
+ 321   1          int ret;
+ 322   1          ret = BMS_ReadRegisters(66, 8, buf);
+ 323   1          if (ret != 0) return ret;
+ 324   1          volt->cell_voltage_max          = buf[0];
+ 325   1          volt->cell_voltage_max_recover  = buf[1];
+ 326   1          volt->cell_voltage_min          = buf[2];
+ 327   1          volt->cell_voltage_min_recover  = buf[3];
+ 328   1          volt->pack_voltage_max          = buf[4];
+ 329   1          volt->pack_voltage_max_recover  = buf[5];
+ 330   1          volt->pack_voltage_min          = buf[6];
+ 331   1          volt->pack_voltage_min_recover  = buf[7];
+ 332   1          return 0;
+ 333   1      }
+ 334          
+ 335          int BMS_ReadTempProtect(BMS_TempProtect_t *temp) {
+ 336   1          unsigned int xdata buf[10];
+ 337   1          int ret;
+ 338   1          ret = BMS_ReadRegisters(74, 10, buf);
+ 339   1          if (ret != 0) return ret;
+ 340   1          temp->pack_tmp_max_chg          = (signed int)buf[0];
+ 341   1          temp->pack_tmp_max_chg_recover  = (signed int)buf[1];
+ 342   1          temp->pack_tmp_max_dsg          = (signed int)buf[2];
+ 343   1          temp->pack_tmp_max_dsg_recover  = (signed int)buf[3];
+ 344   1          temp->pack_tmp_min_chg          = (signed int)buf[4];
+ 345   1          temp->pack_tmp_min_chg_recover  = (signed int)buf[5];
+ 346   1          temp->pack_tmp_min_dsg          = (signed int)buf[6];
+ 347   1          temp->pack_tmp_min_dsg_recover  = (signed int)buf[7];
+ 348   1          temp->mos_tmp_max               = (signed int)buf[8];
+ 349   1          temp->mos_tmp_max_recover       = (signed int)buf[9];
+ 350   1          return 0;
+ 351   1      }
+ 352          
+ 353          int BMS_ReadCurrentProtect(BMS_CurrentProtect_t *curr) {
+ 354   1          unsigned int xdata buf[18];
+ 355   1          int ret;
+ 356   1          unsigned char i;
+ 357   1          ret = BMS_ReadRegisters(86, 18, buf);
+ 358   1          if (ret != 0) return ret;
+ 359   1          for (i = 0; i < 3; i++) {
+ 360   2              curr->dsg[i].cur          = buf[i * 3 + 0];
+ 361   2              curr->dsg[i].time_action  = buf[i * 3 + 1];
+ 362   2              curr->dsg[i].time_recover = buf[i * 3 + 2];
+ 363   2          }
+ 364   1          for (i = 0; i < 3; i++) {
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 7   
+
+ 365   2              curr->chg[i].cur          = buf[9 + i * 3 + 0];
+ 366   2              curr->chg[i].time_action  = buf[9 + i * 3 + 1];
+ 367   2              curr->chg[i].time_recover = buf[9 + i * 3 + 2];
+ 368   2          }
+ 369   1          return 0;
+ 370   1      }
+ 371          
+ 372          int BMS_ReadRealtimeData(BMS_RealtimeData_t *rt) {
+ 373   1          unsigned int xdata buf[10];
+ 374   1          int ret;
+ 375   1          ret = BMS_ReadRegisters(104, 10, buf);
+ 376   1          if (ret != 0) return ret;
+ 377   1          rt->err_flag.raw   = buf[0];
+ 378   1          rt->err_flag_h     = buf[1];
+ 379   1          rt->status         = buf[2];
+ 380   1          rt->cell_tmp       = (signed int)buf[3];
+ 381   1          rt->mos_tmp        = (signed int)buf[4];
+ 382   1          rt->soc            = buf[5];
+ 383   1          rt->cell_voltage   = buf[6];
+ 384   1          rt->cell_current   = (signed int)buf[7];
+ 385   1          rt->out_voltage    = buf[8];
+ 386   1          rt->out_current    = (signed int)buf[9];
+ 387   1          return 0;
+ 388   1      }
+ 389          
+ 390          int BMS_ReadAll(BMS_Device_t *dev) {
+ 391   1          int ret;
+ 392   1          ret = BMS_ReadSystemInfo(&dev->sys);    if (ret) return ret;
+ 393   1          ret = BMS_ReadIDInfo(&dev->id);         if (ret) return ret;
+ 394   1          ret = BMS_ReadEventCount(&dev->event);  if (ret) return ret;
+ 395   1          ret = BMS_ReadCalibConfig(&dev->calib); if (ret) return ret;
+ 396   1          ret = BMS_ReadVoltageProtect(&dev->volt); if (ret) return ret;
+ 397   1          ret = BMS_ReadTempProtect(&dev->temp);  if (ret) return ret;
+ 398   1          ret = BMS_ReadCurrentProtect(&dev->curr); if (ret) return ret;
+ 399   1          ret = BMS_ReadRealtimeData(&dev->rt);   if (ret) return ret;
+ 400   1          return 0;
+ 401   1      }
+ 402          
+ 403          /* ================================================================
+ 404           * ???? ? ????????? xdata
+ 405           * ================================================================ */
+ 406          int BMS_WriteCalibConfig(BMS_CalibConfig_t *calib) {
+ 407   1          unsigned int xdata buf[3];
+ 408   1          int ret;
+ 409   1          buf[0] = calib->ntc_material;
+ 410   1          buf[1] = (unsigned int)calib->zero_adjust;
+ 411   1          buf[2] = calib->current_adjust;
+ 412   1          ret = BMS_WriteRegisters(46, 3, buf);
+ 413   1          if (ret != 0) return ret;
+ 414   1          buf[0] = calib->cell_material;
+ 415   1          buf[1] = calib->factory_ah;
+ 416   1          return BMS_WriteRegisters(50, 2, buf);
+ 417   1      }
+ 418          
+ 419          int BMS_WriteVoltageProtect(BMS_VoltageProtect_t *volt) {
+ 420   1          unsigned int xdata buf[8];
+ 421   1          buf[0] = volt->cell_voltage_max;
+ 422   1          buf[1] = volt->cell_voltage_max_recover;
+ 423   1          buf[2] = volt->cell_voltage_min;
+ 424   1          buf[3] = volt->cell_voltage_min_recover;
+ 425   1          buf[4] = volt->pack_voltage_max;
+ 426   1          buf[5] = volt->pack_voltage_max_recover;
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 8   
+
+ 427   1          buf[6] = volt->pack_voltage_min;
+ 428   1          buf[7] = volt->pack_voltage_min_recover;
+ 429   1          return BMS_WriteRegisters(66, 8, buf);
+ 430   1      }
+ 431          
+ 432          int BMS_WriteTempProtect(BMS_TempProtect_t *temp) {
+ 433   1          unsigned int xdata buf[10];
+ 434   1          buf[0] = (unsigned int)temp->pack_tmp_max_chg;
+ 435   1          buf[1] = (unsigned int)temp->pack_tmp_max_chg_recover;
+ 436   1          buf[2] = (unsigned int)temp->pack_tmp_max_dsg;
+ 437   1          buf[3] = (unsigned int)temp->pack_tmp_max_dsg_recover;
+ 438   1          buf[4] = (unsigned int)temp->pack_tmp_min_chg;
+ 439   1          buf[5] = (unsigned int)temp->pack_tmp_min_chg_recover;
+ 440   1          buf[6] = (unsigned int)temp->pack_tmp_min_dsg;
+ 441   1          buf[7] = (unsigned int)temp->pack_tmp_min_dsg_recover;
+ 442   1          buf[8] = (unsigned int)temp->mos_tmp_max;
+ 443   1          buf[9] = (unsigned int)temp->mos_tmp_max_recover;
+ 444   1          return BMS_WriteRegisters(74, 10, buf);
+ 445   1      }
+ 446          
+ 447          int BMS_WriteCurrentProtect(BMS_CurrentProtect_t *curr) {
+ 448   1          unsigned int xdata buf[18];
+ 449   1          unsigned char i;
+ 450   1          for (i = 0; i < 3; i++) {
+ 451   2              buf[i * 3 + 0] = curr->dsg[i].cur;
+ 452   2              buf[i * 3 + 1] = curr->dsg[i].time_action;
+ 453   2              buf[i * 3 + 2] = curr->dsg[i].time_recover;
+ 454   2          }
+ 455   1          for (i = 0; i < 3; i++) {
+ 456   2              buf[9 + i * 3 + 0] = curr->chg[i].cur;
+ 457   2              buf[9 + i * 3 + 1] = curr->chg[i].time_action;
+ 458   2              buf[9 + i * 3 + 2] = curr->chg[i].time_recover;
+ 459   2          }
+ 460   1          return BMS_WriteRegisters(86, 18, buf);
+ 461   1      }
+ 462          
+ 463          /* ================================================================
+ 464           * ????
+ 465           * ================================================================ */
+ 466          int BMS_SendSleepCommand(void) {
+ 467   1          unsigned char idx;
+ 468   1          unsigned int crc;
+ 469   1          int ret;
+ 470   1      
+ 471   1          ET1 = 0;
+ 472   1          IE2 &= (unsigned char)~0x01;
+ 473   1          rt_read_active = 0;
+ 474   1      
+ 475   1          ret = BMS_WriteRegister(1U, 0x0000U);
+ 476   1          if (ret == 0) {
+ 477   2              DelayMs(10U);
+ 478   2      
+ 479   2              idx = 0;
+ 480   2              tx_buf[idx++] = BMS_SLAVE_ID;
+ 481   2              tx_buf[idx++] = 0x06U;
+ 482   2              tx_buf[idx++] = 0x00U;
+ 483   2              tx_buf[idx++] = 0x02U;
+ 484   2              tx_buf[idx++] = 0x10U;
+ 485   2              tx_buf[idx++] = 0x00U;
+ 486   2      
+ 487   2              crc = BMS_CRC16(tx_buf, idx);
+ 488   2              tx_buf[idx++] = (unsigned char)(crc & 0xFFU);
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 9   
+
+ 489   2              tx_buf[idx++] = (unsigned char)(crc >> 8);
+ 490   2      
+ 491   2              UART_SendBytes(tx_buf, idx);
+ 492   2          }
+ 493   1      
+ 494   1          ET1 = 1;
+ 495   1          return ret;
+ 496   1      }
+ 497          
+ 498          /* ================================================================
+ 499           * Non-blocking realtime read (interrupt-driven)
+ 500           * ================================================================ */
+ 501          static int BMS_ParseRealtimeFrame(unsigned char *buf, unsigned char len)
+ 502          {
+ 503   1          unsigned int crc_rx, crc_calc;
+ 504   1      
+ 505   1          if (len < 5U) return -6;
+ 506   1          crc_rx = ((unsigned int)buf[len - 1] << 8) | buf[len - 2];
+ 507   1          crc_calc = BMS_CRC16(buf, len - 2);
+ 508   1          if (crc_rx != crc_calc) return -4;
+ 509   1          if (buf[0] != BMS_SLAVE_ID) return -5;
+ 510   1          if (buf[1] & 0x80U) return -(100 + buf[2]);
+ 511   1      
+ 512   1          rt.err_flag.raw  = ((unsigned int)buf[3]  << 8) | buf[4];
+ 513   1          rt.err_flag_h    = ((unsigned int)buf[5]  << 8) | buf[6];
+ 514   1          rt.status        = ((unsigned int)buf[7]  << 8) | buf[8];
+ 515   1          rt.cell_tmp      = (signed int)(((unsigned int)buf[9]  << 8) | buf[10]);
+ 516   1          rt.mos_tmp       = (signed int)(((unsigned int)buf[11] << 8) | buf[12]);
+ 517   1          rt.soc           = ((unsigned int)buf[13] << 8) | buf[14];
+ 518   1          rt.cell_voltage  = ((unsigned int)buf[15] << 8) | buf[16];
+ 519   1          rt.cell_current  = (signed int)(((unsigned int)buf[17] << 8) | buf[18]);
+ 520   1          rt.out_voltage   = ((unsigned int)buf[19] << 8) | buf[20];
+ 521   1          rt.out_current   = (signed int)(((unsigned int)buf[21] << 8) | buf[22]);
+ 522   1          return 0;
+ 523   1      }
+ 524          
+ 525          void BMS_StartRealtimeRead(void)
+ 526          {
+ 527   1          unsigned char idx = 0;
+ 528   1          unsigned int crc;
+ 529   1      
+ 530   1          if (rt_read_active) {
+ 531   2              if ((GetTickMs() - rt_deadline) < BMS_USART_TIMEOUT) return;
+ 532   2              rt_read_active = 0;
+ 533   2              IE2 &= (unsigned char)~0x01;
+ 534   2          }
+ 535   1      
+ 536   1          rt_read_active = 1;
+ 537   1          rt_ready = 0;
+ 538   1      
+ 539   1          tx_buf[idx++] = BMS_SLAVE_ID;
+ 540   1          tx_buf[idx++] = 0x03;
+ 541   1          tx_buf[idx++] = 0x00;
+ 542   1          tx_buf[idx++] = 104;
+ 543   1          tx_buf[idx++] = 0x00;
+ 544   1          tx_buf[idx++] = 10;
+ 545   1          crc = BMS_CRC16(tx_buf, idx);
+ 546   1          tx_buf[idx++] = (unsigned char)(crc & 0xFF);
+ 547   1          tx_buf[idx++] = (unsigned char)(crc >> 8);
+ 548   1      
+ 549   1          BMS_ClearRxState();
+ 550   1          rt_rx_cnt = 0;
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 10  
+
+ 551   1          rt_deadline = GetTickMs();
+ 552   1      
+ 553   1          UART_SendBytes(tx_buf, idx);
+ 554   1          IE2 |= 0x01;
+ 555   1      }
+ 556          
+ 557          void BMS_OnRxByte(unsigned char b)
+ 558          {
+ 559   1          unsigned char expected;
+ 560   1      
+ 561   1          if (!rt_read_active) return;
+ 562   1      
+ 563   1          if (rt_rx_cnt < (unsigned char)sizeof(rt_rx_buf)) {
+ 564   2              rt_rx_buf[rt_rx_cnt++] = b;
+ 565   2          } else {
+ 566   2              rt_read_active = 0;
+ 567   2              rt_rx_cnt = 0;
+ 568   2              IE2 &= (unsigned char)~0x01;
+ 569   2              return;
+ 570   2          }
+ 571   1      
+ 572   1          if (rt_rx_cnt < 2) return;
+ 573   1      
+ 574   1          if (rt_rx_buf[1] & 0x80U) {
+ 575   2              expected = 5;
+ 576   2          } else {
+ 577   2              if (rt_rx_cnt < 3) return;
+ 578   2              expected = 5 + rt_rx_buf[2];
+ 579   2              if (expected > (unsigned char)sizeof(rt_rx_buf)) {
+ 580   3                  rt_read_active = 0;
+ 581   3                  rt_rx_cnt = 0;
+ 582   3                  IE2 &= (unsigned char)~0x01;
+ 583   3                  return;
+ 584   3              }
+ 585   2          }
+ 586   1      
+ 587   1          if (rt_rx_cnt >= expected) {
+ 588   2              rt_read_active = 0;
+ 589   2              IE2 &= (unsigned char)~0x01;
+ 590   2              rt_frame_len = expected;
+ 591   2              rt_ready = 1;
+ 592   2          }
+ 593   1      }
+ 594          
+ 595          int BMS_PollRealtimeData(void)
+ 596          {
+ 597   1          if (rt_ready) {
+ 598   2              rt_ready = 0;
+ 599   2              if (BMS_ParseRealtimeFrame(rt_rx_buf, rt_frame_len) == 0) {
+ 600   3                  return 1;
+ 601   3              }
+ 602   2              return -1;
+ 603   2          }
+ 604   1          if (rt_read_active && (GetTickMs() - rt_deadline) >= BMS_USART_TIMEOUT) {
+ 605   2              rt_read_active = 0;
+ 606   2              IE2 &= (unsigned char)~0x01;
+ 607   2              return -1;
+ 608   2          }
+ 609   1          return 0;
+ 610   1      }
+ 611          
+ 612          
+C51 COMPILER V9.59.0.0   MODBUS                                                            08/24/2026 15:16:52 PAGE 11  
+
+ 613          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   5625    ----
+   CONSTANT SIZE    =     10    ----
+   XDATA SIZE       =    612     318
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,94 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              08/24/2026 15:16:51 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\Keil_C51\C51\BIN\C51.EXE User\main.c LARGE OMF2 WARNINGLEVEL(0) OPTIMIZE(8,SPEED) BROWSE
+                    - INCDIR(.\User;.\Application) DEBUG PRINT(.\Listings\main.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC8H.H>
+   2          #include "gpio.h"
+   3          #include "dma.h"
+   4          #include "tim.h"
+   5          #include "usart.h"
+   6          #include "modbus.h"
+   7          #include "numled.h"
+   8          #include "key.h"
+   9          #include "clock.h"
+  10          
+  11          BMS_Device_t  bms_dev;
+  12          extern volatile uint8_t Soc_Flag;
+  13          
+  14          volatile uint8_t g_1s_flag = 0;
+  15          
+  16          void main(void){
+  17   1          int poll_result;
+  18   1          SystemClock_Init();
+  19   1          MX_UART2_Init();
+  20   1          UART1_Init();       // 新增调试口
+  21   1          Num_Led_Init();
+  22   1          Key_Init();
+  23   1          MX_TIM0_Init();
+  24   1          EA = 1;
+  25   1          while (1){
+  26   2              Key_Action();
+  27   2      
+  28   2      
+  29   2      
+  30   2      
+  31   2      
+  32   2              if (g_1s_flag && Soc_Flag == 0){
+  33   3                  g_1s_flag = 0;
+  34   3                  BMS_StartRealtimeRead();
+  35   3              }
+  36   2              if (Soc_Flag == 0){
+  37   3                  poll_result = BMS_PollRealtimeData();
+  38   3                  if (poll_result != 0){
+  39   4                      /* 成功显示新数据；失败时rt未被覆盖，显示上次缓存数据 */
+  40   4                      Soc_Show();
+  41   4                  }
+  42   3              }
+  43   2          }
+  44   1      }
+  45          
+  46          static unsigned char cnt_key = 0;
+  47          static unsigned int cnt_1s = 0;
+  48          
+  49          void App_1msTask(void){
+  50   1          Led_under_deal();
+  51   1          if(++cnt_key >= 10){
+  52   2              Key_Scan();
+  53   2              cnt_key = 0;
+  54   2          }
+C51 COMPILER V9.59.0.0   MAIN                                                              08/24/2026 15:16:51 PAGE 2   
+
+  55   1          if(++cnt_1s >= 1000){
+  56   2              cnt_1s = 0;
+  57   2              g_1s_flag = 1;         /* trigger periodic read every 1s */
+  58   2          }
+  59   1      }
+  60          
+  61          
+  62          
+  63          
+  64          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    120    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =    198    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

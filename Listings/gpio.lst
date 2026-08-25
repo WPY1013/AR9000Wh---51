@@ -1,0 +1,45 @@
+C51 COMPILER V9.59.0.0   GPIO                                                              08/24/2026 15:16:51 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE GPIO
+OBJECT MODULE PLACED IN .\Objects\gpio.obj
+COMPILER INVOKED BY: C:\Keil_v5\Keil_C51\C51\BIN\C51.EXE User\gpio.c LARGE OMF2 WARNINGLEVEL(0) OPTIMIZE(8,SPEED) BROWSE
+                    - INCDIR(.\User;.\Application) DEBUG PRINT(.\Listings\gpio.lst) TABS(2) OBJECT(.\Objects\gpio.obj)
+
+line level    source
+
+   1          #include <STC8H.H>
+   2          
+   3          /* Change these macros to match the PCB. */
+   4          #define LED_PORT_MODE0 P3M0
+   5          #define LED_PORT_MODE1 P3M1
+   6          #define LED_PIN        P32
+   7          #define LED_ACTIVE_LOW 1
+   8          
+   9          void MX_GPIO_Init(void)
+  10          {
+  11   1          /* Push-pull output. */
+  12   1          LED_PORT_MODE0 |= 0x04;
+  13   1          LED_PORT_MODE1 &= (unsigned char)~0x04;
+  14   1          LED_PIN = LED_ACTIVE_LOW ? 1 : 0;
+  15   1      }
+  16          
+  17          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =      9    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

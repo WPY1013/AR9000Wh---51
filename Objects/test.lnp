@@ -1,0 +1,12 @@
+".\Objects\STARTUP.obj",
+".\Objects\main.obj",
+".\Objects\gpio.obj",
+".\Objects\tim.obj",
+".\Objects\usart.obj",
+".\Objects\clock.obj",
+".\Objects\key.obj",
+".\Objects\modbus.obj",
+".\Objects\numled.obj" 
+TO ".\Objects\test" 
+
+PRINT(".\Listings\test.map") REMOVEUNUSED 

@@ -1,0 +1,38 @@
+{
+    "configurations": [
+        {
+            "name": "Target 1",
+            "includePath": [
+                "c:\\Users\\91620\\Desktop\\wpy\\work\\AR9000Wh\\AR9000Wh\\AR9000Wh\\01代码\\AR9000Wh - 51\\User",
+                "c:\\Users\\91620\\Desktop\\wpy\\work\\AR9000Wh\\AR9000Wh\\AR9000Wh\\01代码\\AR9000Wh - 51\\Application",
+                "c:\\Users\\91620\\Desktop\\wpy\\work\\AR9000Wh\\AR9000Wh\\AR9000Wh\\01代码\\AR9000Wh - 51"
+            ],
+            "defines": [
+                "__C51__",
+                "__VSCODE_C51__",
+                "reentrant=",
+                "compact=",
+                "small=",
+                "large=",
+                "data=",
+                "idata=",
+                "pdata=",
+                "bdata=",
+                "xdata=",
+                "code=",
+                "bit=char",
+                "sbit=char",
+                "sfr=char",
+                "sfr16=int",
+                "sfr32=int",
+                "interrupt=",
+                "using=",
+                "_at_=",
+                "_priority_=",
+                "_task_="
+            ],
+            "intelliSenseMode": "${default}"
+        }
+    ],
+    "version": 4
+}

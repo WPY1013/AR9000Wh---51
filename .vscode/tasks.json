@@ -1,0 +1,27 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Keil: Build Target 1",
+            "type": "process",
+            "command": "${workspaceFolder}\\.vscode\\keil-rebuild.cmd",
+            "args": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$c51"]
+        },
+        {
+            "label": "Keil: Rebuild Target 1",
+            "type": "process",
+            "command": "${workspaceFolder}\\.vscode\\keil-rebuild.cmd",
+            "args": [],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": ["$c51"]
+        }
+    ]
+}

@@ -1,0 +1,248 @@
+C51 COMPILER V9.59.0.0   NUMLED                                                            08/24/2026 15:16:52 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE NUMLED
+OBJECT MODULE PLACED IN .\Objects\numled.obj
+COMPILER INVOKED BY: C:\Keil_v5\Keil_C51\C51\BIN\C51.EXE Application\numled.c LARGE OMF2 WARNINGLEVEL(0) OPTIMIZE(8,SPEE
+                    -D) BROWSE INCDIR(.\User;.\Application) DEBUG PRINT(.\Listings\numled.lst) TABS(2) OBJECT(.\Objects\numled.obj)
+
+line level    source
+
+   1          #include "numled.h"
+   2          #include "modbus.h"
+   3          #include <intrins.h>
+   4          #include "key.h"
+   5          
+   6          static unsigned char led_disp_step = 0;   // 扫描步骤
+   7          volatile ByteBit_Union DG1_Flag = {0};
+   8          volatile ByteBit_Union DG2_Flag = {0};
+   9          volatile ByteBit_Union DG3_Flag = {0};
+  10          volatile BMS_RealtimeData_t rt;
+  11          volatile unsigned char g_rt_ready = 0;
+  12          
+  13          void Num_Led_Init(void)
+  14          {
+  15   1          // 初始化全部5个IO为推挽输出模式
+  16   1          led_io_1_out;
+  17   1          led_io_2_out;
+  18   1          led_io_3_out;
+  19   1          led_io_4_out;
+  20   1          led_io_5_out;
+  21   1      
+  22   1          // 全部输出低电平，熄灭所有LED
+  23   1          led_io_1 = 0;
+  24   1          led_io_2 = 0;
+  25   1          led_io_3 = 0;
+  26   1          led_io_4 = 0;
+  27   1          led_io_5 = 0;
+  28   1      }
+  29          
+  30          void Led_under_deal(void) 
+  31          {
+  32   1          // 第一步：先将所有IO设为输入(高阻)，避免互相干扰
+  33   1          led_io_1=0;
+  34   1          led_io_2=0;
+  35   1          led_io_3=0; 
+  36   1          led_io_4=0; 
+  37   1          led_io_5=0;
+  38   1          led_io_1_in;
+  39   1          led_io_2_in;
+  40   1          led_io_3_in;
+  41   1          led_io_4_in;
+  42   1          led_io_5_in;
+  43   1          
+  44   1          // 第二步：根据段数据，将对应的IO设为阳极拉高，其余设为阴极拉低
+  45   1          if (led_disp_step == 0) {
+  46   2              if (DG3_B) {led_io_2_out;led_io_2=1;}//B3
+  47   2              if (DG3_D) {led_io_3_out;led_io_3=1;}//D3
+  48   2              if (DG3_F) {led_io_4_out;led_io_4=1;}//F3
+  49   2              if (DG3_G) {led_io_5_out;led_io_5=1;}//G3
+  50   2              led_io_1_out;     
+  51   2              led_io_1=0;//阴极线1
+  52   2          } 
+  53   1          else if (led_disp_step == 1) {
+  54   2              if (DG2_B) {led_io_3_out;led_io_3=1;}//B2
+C51 COMPILER V9.59.0.0   NUMLED                                                            08/24/2026 15:16:52 PAGE 2   
+
+  55   2              if (DG2_D) {led_io_4_out;led_io_4=1;}//D2
+  56   2              if (DG2_E) {led_io_5_out;led_io_5=1;}//E2
+  57   2              if (DG3_A) {led_io_1_out;led_io_1=1;}//A3
+  58   2              led_io_2_out;     
+  59   2              led_io_2=0;//阴极线2
+  60   2          } 
+  61   1          else if (led_disp_step == 2) {
+  62   2              if (DG2_A) {led_io_2_out;led_io_2=1;}//A2
+  63   2              if (DG2_C) {led_io_4_out;led_io_4=1;}//C2
+  64   2              if (DG2_F) {led_io_5_out;led_io_5=1;}//F2
+  65   2              if (DG3_C) {led_io_1_out;led_io_1=1;}//C3
+  66   2              led_io_3_out;     
+  67   2              led_io_3=0;//阴极线3
+  68   2          } 
+  69   1          else if (led_disp_step == 3) {
+  70   2              if (DG3_E) {led_io_1_out;led_io_1=1;}//E3
+  71   2              if (DG2_G) {led_io_5_out;led_io_5=1;}//G2
+  72   2              if (DG1_B) {led_io_3_out;led_io_3=1; }//B1
+  73   2              if (DG1_C) {led_io_2_out;led_io_2=1; }//C1
+  74   2              led_io_4_out;     
+  75   2              led_io_4=0;//阴极线4
+  76   2          }
+  77   1          else if (led_disp_step == 4) {
+  78   2              if (DG1_A) {led_io_3_out;led_io_3=1; }//充放电指示灯
+  79   2              if (DG1_D) {led_io_2_out;led_io_2=1; }//%号
+  80   2              led_io_5_out;     
+  81   2              led_io_5=0;//阴极线5
+  82   2        }
+  83   1          led_disp_step++;
+  84   1          if (led_disp_step >= 5) led_disp_step = 0;
+  85   1      }
+  86          
+  87          /*数码全显或全关*/
+  88          void DG_ALL(bit EN_DIS)
+  89          {
+  90   1        if(EN_DIS)  //全显
+  91   1        {
+  92   2            DG1_Flag.byte = 0xff;
+  93   2            DG2_Flag.byte = 0xff;
+  94   2            DG3_Flag.byte = 0xff;
+  95   2        }
+  96   1        else  //全关
+  97   1        {
+  98   2          DG1_Flag.byte = 0;
+  99   2          DG2_Flag.byte = 0;
+ 100   2          DG3_Flag.byte = 0;    
+ 101   2        }
+ 102   1      }
+ 103          //后面的符号灯：充电全开 -- 1 放电开一个 -- 2 全关 -- 3
+ 104          void DG_LED(unsigned char EN_DIS) {
+ 105   1        if(EN_DIS == 1) { // 充电全开
+ 106   2          DG1_A = 1;
+ 107   2          DG1_D = 1;
+ 108   2        }else if (EN_DIS == 2) { // 放电开一个
+ 109   2          DG1_A = 0;
+ 110   2          DG1_D = 1;
+ 111   2        }else if (EN_DIS == 3) { // 全关
+ 112   2          DG1_A = 0;
+ 113   2          DG1_D = 0;
+ 114   2        }
+ 115   1      }
+ 116          
+C51 COMPILER V9.59.0.0   NUMLED                                                            08/24/2026 15:16:52 PAGE 3   
+
+ 117          /*
+ 118          num1:第一位数码管显示的百位数字（1）
+ 119          num2:第二位数码管显示的十位数字或报错头E（0-9，E）
+ 120          num3:第三位数码管显示的个位数字或报错码（0-9，A，b，c，d，E，F）
+ 121          */
+ 122          void DG_Display(unsigned int num1,unsigned int num2,unsigned int num3)
+ 123          { 
+ 124   1          bit ea_save;               // 保存 EA 状态
+ 125   1          ea_save = EA;              // 备份当前中断状态
+ 126   1          EA = 0;                    // 关中断，避免临界冲突
+ 127   1          DG_ALL(0);//全写0
+ 128   1          // 设置第一位数码管的段(0/1)
+ 129   1          switch(num1)
+ 130   1          {
+ 131   2              case 1: DG1_B=1;DG1_C=1; break;// 1
+ 132   2              default: break;   
+ 133   2          }
+ 134   1          // 设置第二位数码管的段，0-9，E
+ 135   1          switch(num2)
+ 136   1          {
+ 137   2              case 0: DG2_A=1;DG2_B=1;DG2_C=1;DG2_D=1;DG2_E=1;DG2_F=1; break;//0
+ 138   2              case 1: DG2_B=1;DG2_C=1; break;//1
+ 139   2              case 2: DG2_A=1;DG2_B=1;DG2_D=1;DG2_E=1;DG2_G=1; break;//2
+ 140   2              case 3: DG2_A=1;DG2_B=1;DG2_C=1;DG2_D=1;DG2_G=1; break;//3
+ 141   2              case 4: DG2_B=1;DG2_C=1;DG2_F=1;DG2_G=1; break;//4
+ 142   2              case 5: DG2_A=1;DG2_C=1;DG2_D=1;DG2_F=1;DG2_G=1; break;//5
+ 143   2              case 6: DG2_A=1;DG2_C=1;DG2_D=1;DG2_E=1;DG2_F=1;DG2_G=1; break;//6
+ 144   2              case 7: DG2_A=1;DG2_B=1;DG2_C=1; break;//7
+ 145   2              case 8: DG2_A=1;DG2_B=1;DG2_C=1;DG2_D=1;DG2_E=1;DG2_F=1;DG2_G=1; break;//8
+ 146   2              case 9: DG2_A=1;DG2_B=1;DG2_C=1;DG2_D=1;DG2_F=1;DG2_G=1; break;//9
+ 147   2              case 10: DG2_A=1;DG2_D=1;DG2_E=1;DG2_F=1;DG2_G=1; break;//E
+ 148   2              default: break;   
+ 149   2          }
+ 150   1          // 设置第三位数码管的段 （0-9，A，b，c，d，E，F）
+ 151   1          switch(num3) 
+ 152   1          {
+ 153   2              case 0: DG3_A=1;DG3_B=1;DG3_C=1;DG3_D=1;DG3_E=1;DG3_F=1; break;//0
+ 154   2              case 1: DG3_B=1;DG3_C=1; break;//1
+ 155   2              case 2: DG3_A=1;DG3_B=1;DG3_D=1;DG3_E=1;DG3_G=1; break;//2
+ 156   2              case 3: DG3_A=1;DG3_B=1;DG3_C=1;DG3_D=1;DG3_G=1; break;//3
+ 157   2              case 4: DG3_B=1;DG3_C=1;DG3_F=1;DG3_G=1; break;//4
+ 158   2              case 5: DG3_A=1;DG3_C=1;DG3_D=1;DG3_F=1;DG3_G=1; break;//5
+ 159   2              case 6: DG3_A=1;DG3_C=1;DG3_D=1;DG3_E=1;DG3_F=1;DG3_G=1; break;//6
+ 160   2              case 7: DG3_A=1;DG3_B=1;DG3_C=1; break;//7
+ 161   2              case 8: DG3_A=1;DG3_B=1;DG3_C=1;DG3_D=1;DG3_E=1;DG3_F=1;DG3_G=1; break;//8
+ 162   2              case 9: DG3_A=1;DG3_B=1;DG3_C=1;DG3_D=1;DG3_F=1;DG3_G=1; break;//9
+ 163   2              case 10: DG3_A=1;DG3_B=1;DG3_C=1;DG3_E=1;DG3_F=1;DG3_G=1; break;//A
+ 164   2              case 11: DG3_C=1;DG3_D=1;DG3_E=1;DG3_F=1;DG3_G=1; break;//b
+ 165   2              case 12: DG3_D=1;DG3_E=1;DG3_G=1; break;//c
+ 166   2              case 13: DG3_B=1;DG3_C=1;DG3_D=1;DG3_E=1;DG3_G=1; break;//d
+ 167   2            //case 13: DG3_A=1;DG3_B=1;DG3_D=1;DG3_E=1;DG3_F=1;DG3_G=1;break;//e
+ 168   2              case 14: DG3_A=1;DG3_D=1;DG3_E=1;DG3_F=1;DG3_G=1; break;//E
+ 169   2              case 15: DG3_A=1;DG3_E=1;DG3_F=1;DG3_G=1;break;//F    
+ 170   2              default: break;
+ 171   2           }
+ 172   1           // ===== 临界区结束 =====
+ 173   1           EA = ea_save;    // 恢复中断状态
+ 174   1      }
+ 175          
+ 176          signed short int out_current;
+ 177          void Soc_Show(void)
+ 178          {
+C51 COMPILER V9.59.0.0   NUMLED                                                            08/24/2026 15:16:52 PAGE 4   
+
+ 179   1          unsigned int fault_code = 0U;
+ 180   1          unsigned int idx;
+ 181   1          ErrFlag_t terr_flag;
+ 182   1          
+ 183   1          unsigned short int soc;
+ 184   1          unsigned int soc_bai, soc_shi, soc_ge;
+ 185   1      
+ 186   1          terr_flag = rt.err_flag;
+ 187   1          if(terr_flag.raw == 0){/* always show SOC */
+ 188   2              out_current = rt.out_current;
+ 189   2              if(out_current <= 10){/* 0.1A */
+ 190   3                  soc = rt.soc / 10;
+ 191   3                  soc_bai = soc / 100;
+ 192   3                  soc_shi = (soc / 10) % 10;
+ 193   3                  soc_ge = soc % 10;
+ 194   3                  DG_Display(soc_bai, soc_shi, soc_ge);
+ 195   3                  DG_LED(2);
+ 196   3              }else{/* charge */
+ 197   3                  soc = rt.soc / 10;
+ 198   3                  soc_bai = soc / 100;
+ 199   3                  soc_shi = (soc / 10) % 10;
+ 200   3                  soc_ge = soc % 10;
+ 201   3                  DG_Display(soc_bai, soc_shi, soc_ge);
+ 202   3                  DG_LED(1);
+ 203   3              }
+ 204   2      //        Relay = Relay_ON;
+ 205   2          }else{/* fault */
+ 206   2              for (idx = 0U; idx < 16U; idx++) {
+ 207   3                  if ((terr_flag.raw & ((unsigned short int)1U << idx)) != 0U) {
+ 208   4                      fault_code = idx;
+ 209   4                  }
+ 210   3              }
+ 211   2              DG_Display(0, 10, fault_code);
+ 212   2              DG_LED(3);
+ 213   2          }
+ 214   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1509    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     27      12
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       2
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,104 @@
+C51 COMPILER V9.59.0.0   TIM                                                               08/24/2026 15:16:51 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE TIM
+OBJECT MODULE PLACED IN .\Objects\tim.obj
+COMPILER INVOKED BY: C:\Keil_v5\Keil_C51\C51\BIN\C51.EXE User\tim.c LARGE OMF2 WARNINGLEVEL(0) OPTIMIZE(8,SPEED) BROWSE 
+                    -INCDIR(.\User;.\Application) DEBUG PRINT(.\Listings\tim.lst) TABS(2) OBJECT(.\Objects\tim.obj)
+
+line level    source
+
+   1          #include <STC8H.H>
+   2          #include "tim.h"
+   3          #include "clock.h"
+   4          
+   5          #define T0_TICK_HZ       1000UL
+   6          #define T0_1MS_COUNT        ((SYSTEM_CLOCK_HZ + T0_TICK_HZ / 2UL) / T0_TICK_HZ)
+   7          #define T0_1MS_RELOAD       (65536UL - T0_1MS_COUNT)
+   8          
+   9          volatile unsigned long g_ms_ticks = 0UL;
+  10          volatile unsigned char g_1ms_flag = 0U;
+  11          void MX_TIM0_Init(void)
+  12          {
+  13   1          unsigned int reload;
+  14   1      
+  15   1          reload = (unsigned int)T0_1MS_RELOAD;
+  16   1      
+  17   1          TMOD &= 0xF0;
+  18   1          TMOD |= 0x01;       /* Timer0，16 位模式 */
+  19   1      
+  20   1          AUXR |= 0x80;      /* Timer0 使用 1T 模式 */
+  21   1      
+  22   1          TH0 = (unsigned char)(reload >> 8);
+  23   1          TL0 = (unsigned char)reload;
+  24   1      
+  25   1          TF0 = 0;//清楚TF0标志
+  26   1          ET0 = 1;
+  27   1          PT0 = 1;//使能定时器中断
+  28   1          TR0 = 1;//开启定时器
+  29   1      }
+  30          
+  31          void Timer0_ISR(void) interrupt 1
+  32          {
+  33   1          unsigned int reload;
+  34   1      
+  35   1          reload = (unsigned int)T0_1MS_RELOAD;
+  36   1          TH0 = (unsigned char)(reload >> 8);
+  37   1          TL0 = (unsigned char)reload;
+  38   1      
+  39   1          TF0 = 0;
+  40   1          g_ms_ticks++;
+  41   1          g_1ms_flag = 1U;
+  42   1      
+  43   1          App_1msTask();
+  44   1      }
+  45          
+  46          
+  47          unsigned long HAL_GetTick(void)
+  48          {
+  49   1          unsigned long tick;
+  50   1          bit ea_backup;
+  51   1      
+  52   1          ea_backup = EA;
+  53   1          EA = 0;
+  54   1          tick = g_ms_ticks;
+C51 COMPILER V9.59.0.0   TIM                                                               08/24/2026 15:16:51 PAGE 2   
+
+  55   1          EA = ea_backup;
+  56   1      
+  57   1          return tick;
+  58   1      }
+  59          unsigned long GetTickMs(void)
+  60          {
+  61   1          return HAL_GetTick();
+  62   1      }
+  63          
+  64          void DelayMs(unsigned int ms)
+  65          {
+  66   1          unsigned long start;
+  67   1      
+  68   1          start = HAL_GetTick();
+  69   1      
+  70   1          while ((HAL_GetTick() - start) < (unsigned long)ms)
+  71   1          {
+  72   2              ;
+  73   2          }
+  74   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    228    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =      5       6
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----       1
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
